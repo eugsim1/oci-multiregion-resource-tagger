@@ -1,0 +1,9 @@
+{
+  "Operations": {
+    "CostCenter": "42",
+    "Environment": "Production"
+  },
+  "Security": {
+    "Classification": "Internal"
+  }
+}

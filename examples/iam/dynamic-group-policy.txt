@@ -1,0 +1,4 @@
+Allow dynamic-group ResourceTaggerRunners to inspect tenancies in tenancy
+Allow dynamic-group ResourceTaggerRunners to use instances in compartment TargetCompartment
+Allow dynamic-group ResourceTaggerRunners to use volumes in compartment TargetCompartment
+Allow dynamic-group ResourceTaggerRunners to use tag-namespaces in tenancy where any {target.tag-namespace.name='Operations', target.tag-namespace.name='Security'}

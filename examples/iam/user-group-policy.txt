@@ -1,0 +1,4 @@
+Allow group ResourceTaggers to inspect tenancies in tenancy
+Allow group ResourceTaggers to use instances in compartment TargetCompartment
+Allow group ResourceTaggers to use volumes in compartment TargetCompartment
+Allow group ResourceTaggers to use tag-namespaces in tenancy where any {target.tag-namespace.name='Operations', target.tag-namespace.name='Security'}

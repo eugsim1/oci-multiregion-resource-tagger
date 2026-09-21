@@ -1,0 +1,21 @@
+# Go build and test output
+*.exe
+*.test
+*.out
+coverage.out
+
+# Local dependency and build caches
+.gocache/
+.gomodcache/
+.gopath/
+
+# OCI credentials must never be committed
+.oci/
+*.pem
+*.key
+
+# IDE and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
