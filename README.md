@@ -1,6 +1,6 @@
 # OCI Multiregion Resource Tagger
 
-Apply free-form tags, defined tags, or both to OCI Compute instances, boot volumes, and block volumes in one compartment across every subscribed region in `READY` state.
+Apply free-form tags, nested or flattened defined tags, or any combination of them to OCI Compute instances, boot volumes, and block volumes in one compartment across every subscribed region in `READY` state.
 
 > This project is independent and is not affiliated with, endorsed by, or supported by Oracle or any Oracle product team.
 
@@ -25,6 +25,8 @@ The compartment itself is global, but the resources are regional. Child compartm
 - Existing free-form and defined tags are retained.
 - A supplied value replaces an existing value only when the namespace/key or free-form key matches.
 - Defined-tag namespaces and tag definitions must already exist.
+- Flattened defined-tag input uses `namespace.key` references and is converted to the nested structure required by the OCI SDK.
+- When the same defined tag is supplied more than once, precedence is `-flattened-tag`, then `-flattened-tags`, then `-defined-tags`.
 - The program does not create, rename, or delete tag namespaces or tag definitions.
 - `TERMINATING` and `TERMINATED` resources are skipped.
 - Dry-run is the default. The `-apply` flag is required to make changes.
@@ -136,6 +138,50 @@ go run . \
 
 PowerShell, Bash, tag-file, and IAM examples are catalogued in [`examples/README.md`](examples/README.md).
 
+## Flattened defined tags
+
+Use the repeatable `-flattened-tag` option for direct `namespace.key=value` input:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -flattened-tag "Operations.CostCent=42"
+```
+
+Repeat the option to apply several tags:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -flattened-tag "Operations.CostCent=42" \
+  -flattened-tag "Operations.Environment=Production" \
+  -flattened-tag "Security.Classification=Internal"
+```
+
+For bulk input, `-flattened-tags` accepts a JSON object:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -flattened-tags '{"Operations.CostCenter":"42","Operations.Environment":"Production","Security.Classification":"Internal"}'
+```
+
+This is equivalent to:
+
+```json
+{
+  "Operations": {
+    "CostCenter": "42",
+    "Environment": "Production"
+  },
+  "Security": {
+    "Classification": "Internal"
+  }
+}
+```
+
+Each flattened reference must contain exactly one period separating a non-empty namespace and key. JSON values must be strings. Direct values may be empty and may contain additional `=` characters because the first `=` is treated as the separator. The namespace and tag key definitions must already exist in OCI; therefore `CostCent` must be the exact name of an existing key if that spelling is used.
+
 ## Concurrency
 
 Two worker pools bound the number of concurrent operations:
@@ -168,6 +214,8 @@ go run . \
 | `-compartment-id` | Yes | — | Target compartment OCID. |
 | `-freeform-tags` | One tag option required | `{}` | JSON object containing free-form key/value pairs. |
 | `-defined-tags` | One tag option required | `{}` | JSON object containing namespace/key/value mappings. |
+| `-flattened-tag` | One tag option required | — | Repeatable `namespace.key=value` defined tag. |
+| `-flattened-tags` | One tag option required | `{}` | JSON object containing `namespace.key`/value mappings. |
 | `-apply` | No | `false` | Perform updates. Without it, the program is a dry run. |
 | `-region-workers` | No | `3` | Maximum active regions. |
 | `-resource-workers` | No | `5` | Maximum active resources per region. |

@@ -80,3 +80,77 @@ func TestStringValue(t *testing.T) {
 		t.Fatalf("stringValue(nil) = %q, want empty string", got)
 	}
 }
+
+func TestParseFlattenedDefinedTags(t *testing.T) {
+	got, err := parseFlattenedDefinedTags(
+		`{"Operations.CostCenter":"42","Operations.Environment":"Production","Security.Classification":"Internal"}`,
+	)
+	if err != nil {
+		t.Fatalf("parseFlattenedDefinedTags() error = %v", err)
+	}
+
+	want := map[string]map[string]interface{}{
+		"Operations": {
+			"CostCenter":  "42",
+			"Environment": "Production",
+		},
+		"Security": {
+			"Classification": "Internal",
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseFlattenedDefinedTags() = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseFlattenedDefinedTagsRejectsInvalidInput(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "missing separator", input: `{"CostCenter":"42"}`},
+		{name: "extra separator", input: `{"Operations.Billing.CostCenter":"42"}`},
+		{name: "empty namespace", input: `{".CostCenter":"42"}`},
+		{name: "empty key", input: `{"Operations.":"42"}`},
+		{name: "non-string value", input: `{"Operations.CostCenter":42}`},
+		{name: "invalid JSON", input: `{`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := parseFlattenedDefinedTags(test.input); err == nil {
+				t.Fatalf("parseFlattenedDefinedTags(%q) returned no error", test.input)
+			}
+		})
+	}
+}
+
+func TestParseFlattenedTagAssignments(t *testing.T) {
+	got, err := parseFlattenedTagAssignments([]string{
+		"Operations.CostCent=42",
+		"Operations.Environment=Production",
+		"Security.Classification=Internal=Reviewed",
+	})
+	if err != nil {
+		t.Fatalf("parseFlattenedTagAssignments() error = %v", err)
+	}
+
+	want := map[string]map[string]interface{}{
+		"Operations": {
+			"CostCent":    "42",
+			"Environment": "Production",
+		},
+		"Security": {
+			"Classification": "Internal=Reviewed",
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseFlattenedTagAssignments() = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseFlattenedTagAssignmentsRejectsMissingEquals(t *testing.T) {
+	if _, err := parseFlattenedTagAssignments([]string{"Operations.CostCent"}); err == nil {
+		t.Fatal("parseFlattenedTagAssignments() returned no error")
+	}
+}

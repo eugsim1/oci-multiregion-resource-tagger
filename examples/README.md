@@ -9,6 +9,7 @@ Run an example from the repository root and pass the target compartment OCID:
 ```bash
 ./examples/bash/freeform-dry-run.sh "ocid1.compartment.oc1..example"
 ./examples/bash/defined-tags-apply.sh "ocid1.compartment.oc1..example"
+./examples/bash/flattened-tags-dry-run.sh "ocid1.compartment.oc1..example"
 ./examples/bash/combined-low-concurrency.sh "ocid1.compartment.oc1..example"
 ```
 
@@ -19,6 +20,7 @@ The combined example intentionally remains a dry run.
 ```powershell
 ./examples/powershell/freeform-dry-run.ps1 -CompartmentId "ocid1.compartment.oc1..example"
 ./examples/powershell/defined-tags-apply.ps1 -CompartmentId "ocid1.compartment.oc1..example"
+./examples/powershell/flattened-tags-dry-run.ps1 -CompartmentId "ocid1.compartment.oc1..example"
 ./examples/powershell/combined-low-concurrency.ps1 -CompartmentId "ocid1.compartment.oc1..example"
 ```
 
@@ -38,10 +40,12 @@ PowerShell:
 ```powershell
 $freeform = Get-Content ./examples/tags/freeform-tags.json -Raw
 $defined = Get-Content ./examples/tags/defined-tags.json -Raw
+$flattened = Get-Content ./examples/tags/flattened-tags.json -Raw
 go run . `
     -compartment-id "ocid1.compartment.oc1..example" `
     -freeform-tags $freeform `
-    -defined-tags $defined
+    -defined-tags $defined `
+    -flattened-tags $flattened
 ```
 
 ## IAM policies

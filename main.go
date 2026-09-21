@@ -60,7 +60,20 @@ type regionResult struct {
 	err    error
 }
 
+type flattenedTagFlags []string
+
+func (values *flattenedTagFlags) String() string {
+	return strings.Join(*values, ",")
+}
+
+func (values *flattenedTagFlags) Set(value string) error {
+	*values = append(*values, value)
+	return nil
+}
+
 func main() {
+	var flattenedAssignments flattenedTagFlags
+
 	compartmentID := flag.String(
 		"compartment-id",
 		"",
@@ -75,6 +88,16 @@ func main() {
 		"defined-tags",
 		"{}",
 		`Defined tags as JSON, for example {"Operations":{"CostCenter":"42"}}`,
+	)
+	flattenedJSON := flag.String(
+		"flattened-tags",
+		"{}",
+		`Defined tags in flattened JSON form, for example {"Operations.CostCenter":"42"}`,
+	)
+	flag.Var(
+		&flattenedAssignments,
+		"flattened-tag",
+		`Repeatable defined tag in namespace.key=value form, for example Operations.CostCent=42`,
 	)
 	apply := flag.Bool(
 		"apply",
@@ -121,6 +144,16 @@ func main() {
 	if err := json.Unmarshal([]byte(*definedJSON), &definedTags); err != nil {
 		log.Fatalf("invalid -defined-tags JSON: %v", err)
 	}
+	flattenedTags, err := parseFlattenedDefinedTags(*flattenedJSON)
+	if err != nil {
+		log.Fatalf("invalid -flattened-tags JSON: %v", err)
+	}
+	definedTags = mergeDefinedTags(definedTags, flattenedTags)
+	assignmentTags, err := parseFlattenedTagAssignments(flattenedAssignments)
+	if err != nil {
+		log.Fatalf("invalid -flattened-tag value: %v", err)
+	}
+	definedTags = mergeDefinedTags(definedTags, assignmentTags)
 
 	if len(freeformTags) == 0 && len(definedTags) == 0 {
 		log.Fatal("at least one free-form or defined tag must be specified")
@@ -728,6 +761,61 @@ func mergeDefinedTags(
 	}
 
 	return result
+}
+
+func parseFlattenedDefinedTags(input string) (map[string]map[string]interface{}, error) {
+	var flattened map[string]interface{}
+	if err := json.Unmarshal([]byte(input), &flattened); err != nil {
+		return nil, err
+	}
+
+	expanded := make(map[string]map[string]interface{})
+	for reference, value := range flattened {
+		stringValue, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("%q must have a string value", reference)
+		}
+		if err := addFlattenedDefinedTag(expanded, reference, stringValue); err != nil {
+			return nil, err
+		}
+	}
+
+	return expanded, nil
+}
+
+func parseFlattenedTagAssignments(
+	assignments []string,
+) (map[string]map[string]interface{}, error) {
+	expanded := make(map[string]map[string]interface{})
+	for _, assignment := range assignments {
+		reference, value, found := strings.Cut(assignment, "=")
+		if !found {
+			return nil, fmt.Errorf("%q must use namespace.key=value form", assignment)
+		}
+		if err := addFlattenedDefinedTag(expanded, reference, value); err != nil {
+			return nil, err
+		}
+	}
+	return expanded, nil
+}
+
+func addFlattenedDefinedTag(
+	expanded map[string]map[string]interface{},
+	reference string,
+	value string,
+) error {
+	if strings.Count(reference, ".") != 1 {
+		return fmt.Errorf("%q must use exactly one namespace.key separator", reference)
+	}
+	parts := strings.SplitN(reference, ".", 2)
+	if parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("%q must contain a non-empty namespace and key", reference)
+	}
+	if _, exists := expanded[parts[0]]; !exists {
+		expanded[parts[0]] = make(map[string]interface{})
+	}
+	expanded[parts[0]][parts[1]] = value
+	return nil
 }
 
 func stringValue(value *string) string {
