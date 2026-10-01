@@ -9,22 +9,23 @@ import (
 func TestResourceFlagsSelectOnlyRequestedTypes(t *testing.T) {
 	tests := []struct {
 		name          string
-		compute       bool
-		bootVolumes   bool
-		blockVolumes  bool
+		requested     resourceSelection
 		flagsProvided bool
 		want          []string
 	}{
-		{name: "default selects all", want: []string{"compute instances", "boot volumes", "block volumes"}},
-		{name: "compute only", compute: true, flagsProvided: true, want: []string{"compute instances"}},
-		{name: "boot volumes only", bootVolumes: true, flagsProvided: true, want: []string{"boot volumes"}},
-		{name: "block volumes only", blockVolumes: true, flagsProvided: true, want: []string{"block volumes"}},
-		{name: "combined selection", compute: true, blockVolumes: true, flagsProvided: true, want: []string{"compute instances", "block volumes"}},
+		{name: "default retains compute and volumes", want: []string{"compute instances", "boot volumes", "block volumes"}},
+		{name: "compute only", requested: resourceSelection{compute: true}, flagsProvided: true, want: []string{"compute instances"}},
+		{name: "boot volumes only", requested: resourceSelection{bootVolumes: true}, flagsProvided: true, want: []string{"boot volumes"}},
+		{name: "block volumes only", requested: resourceSelection{blockVolumes: true}, flagsProvided: true, want: []string{"block volumes"}},
+		{name: "VCNs only", requested: resourceSelection{vcns: true}, flagsProvided: true, want: []string{"VCNs"}},
+		{name: "subnets only", requested: resourceSelection{subnets: true}, flagsProvided: true, want: []string{"subnets"}},
+		{name: "security lists only", requested: resourceSelection{securityLists: true}, flagsProvided: true, want: []string{"security lists"}},
+		{name: "combined selection", requested: resourceSelection{compute: true, blockVolumes: true, vcns: true, securityLists: true}, flagsProvided: true, want: []string{"compute instances", "block volumes", "VCNs", "security lists"}},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			selection, err := selectResources(test.compute, test.bootVolumes, test.blockVolumes, test.flagsProvided)
+			selection, err := selectResources(test.requested, test.flagsProvided)
 			if err != nil {
 				t.Fatalf("selectResources() error = %v", err)
 			}
@@ -38,6 +39,9 @@ func TestResourceFlagsSelectOnlyRequestedTypes(t *testing.T) {
 				func() error { listed = append(listed, "compute instances"); return nil },
 				func() error { listed = append(listed, "boot volumes"); return nil },
 				func() error { listed = append(listed, "block volumes"); return nil },
+				func() error { listed = append(listed, "VCNs"); return nil },
+				func() error { listed = append(listed, "subnets"); return nil },
+				func() error { listed = append(listed, "security lists"); return nil },
 			)
 			if len(listErrors) != 0 {
 				t.Fatalf("unexpected listing errors: %v", listErrors)
@@ -50,14 +54,14 @@ func TestResourceFlagsSelectOnlyRequestedTypes(t *testing.T) {
 }
 
 func TestResourceFlagsRejectAllFalseWhenProvided(t *testing.T) {
-	if _, err := selectResources(false, false, false, true); err == nil {
+	if _, err := selectResources(resourceSelection{}, true); err == nil {
 		t.Fatal("explicit resource flags set to false must not select all resource types")
 	}
 }
 
 func TestSelectedResourceListingContinuesAfterError(t *testing.T) {
 	var listed []string
-	selection, err := selectResources(true, true, false, true)
+	selection, err := selectResources(resourceSelection{compute: true, bootVolumes: true, subnets: true}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,8 +73,11 @@ func TestSelectedResourceListingContinuesAfterError(t *testing.T) {
 		},
 		func() error { listed = append(listed, "boot volumes"); return nil },
 		func() error { t.Fatal("block volume listing should not run"); return nil },
+		func() error { t.Fatal("VCN listing should not run"); return nil },
+		func() error { listed = append(listed, "subnets"); return nil },
+		func() error { t.Fatal("security list listing should not run"); return nil },
 	)
-	if !reflect.DeepEqual(listed, []string{"compute instances", "boot volumes"}) {
+	if !reflect.DeepEqual(listed, []string{"compute instances", "boot volumes", "subnets"}) {
 		t.Fatalf("listed resource types = %v", listed)
 	}
 	if !reflect.DeepEqual(listErrors, []string{"compute listing failed"}) {
