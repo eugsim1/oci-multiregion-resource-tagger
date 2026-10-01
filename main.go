@@ -29,23 +29,27 @@ type settings struct {
 }
 
 type resourceSelection struct {
-	compute      bool
-	bootVolumes  bool
-	blockVolumes bool
+	compute       bool
+	bootVolumes   bool
+	blockVolumes  bool
+	vcns          bool
+	subnets       bool
+	securityLists bool
 }
 
-func selectResources(compute, bootVolumes, blockVolumes, flagsProvided bool) (resourceSelection, error) {
+func selectResources(requested resourceSelection, flagsProvided bool) (resourceSelection, error) {
 	if !flagsProvided {
 		return resourceSelection{compute: true, bootVolumes: true, blockVolumes: true}, nil
 	}
-	if !compute && !bootVolumes && !blockVolumes {
+	if !requested.compute && !requested.bootVolumes && !requested.blockVolumes &&
+		!requested.vcns && !requested.subnets && !requested.securityLists {
 		return resourceSelection{}, fmt.Errorf("at least one resource selection flag must be true")
 	}
-	return resourceSelection{compute: compute, bootVolumes: bootVolumes, blockVolumes: blockVolumes}, nil
+	return requested, nil
 }
 
 func (selection resourceSelection) names() []string {
-	names := make([]string, 0, 3)
+	names := make([]string, 0, 6)
 	if selection.compute {
 		names = append(names, "compute instances")
 	}
@@ -55,28 +59,43 @@ func (selection resourceSelection) names() []string {
 	if selection.blockVolumes {
 		names = append(names, "block volumes")
 	}
+	if selection.vcns {
+		names = append(names, "VCNs")
+	}
+	if selection.subnets {
+		names = append(names, "subnets")
+	}
+	if selection.securityLists {
+		names = append(names, "security lists")
+	}
 	return names
 }
 
 type counters struct {
-	found             int64
-	foundInstances    int64
-	foundBootVolumes  int64
-	foundBlockVolumes int64
-	wouldUpdate       int64
-	updated           int64
-	unchanged         int64
-	skipped           int64
-	failed            int64
-	regionFailures    int64
+	found              int64
+	foundInstances     int64
+	foundBootVolumes   int64
+	foundBlockVolumes  int64
+	foundVcns          int64
+	foundSubnets       int64
+	foundSecurityLists int64
+	wouldUpdate        int64
+	updated            int64
+	unchanged          int64
+	skipped            int64
+	failed             int64
+	regionFailures     int64
 }
 
 type resourceKind string
 
 const (
-	resourceInstance    resourceKind = "instance"
-	resourceBootVolume  resourceKind = "boot-volume"
-	resourceBlockVolume resourceKind = "block-volume"
+	resourceInstance     resourceKind = "instance"
+	resourceBootVolume   resourceKind = "boot-volume"
+	resourceBlockVolume  resourceKind = "block-volume"
+	resourceVcn          resourceKind = "vcn"
+	resourceSubnet       resourceKind = "subnet"
+	resourceSecurityList resourceKind = "security-list"
 )
 
 type resourceJob struct {
@@ -150,6 +169,9 @@ func main() {
 		false,
 		"Select block volumes; may be combined with other resource flags",
 	)
+	vcns := flag.Bool("vcns", false, "Select VCNs; may be combined with other resource flags")
+	subnets := flag.Bool("subnets", false, "Select subnets; may be combined with other resource flags")
+	securityLists := flag.Bool("security-lists", false, "Select security lists; may be combined with other resource flags")
 	regionWorkers := flag.Int(
 		"region-workers",
 		3,
@@ -170,11 +192,14 @@ func main() {
 	resourceFlagsProvided := false
 	flag.Visit(func(option *flag.Flag) {
 		switch option.Name {
-		case "compute", "boot-volumes", "block-volumes":
+		case "compute", "boot-volumes", "block-volumes", "vcns", "subnets", "security-lists":
 			resourceFlagsProvided = true
 		}
 	})
-	resources, err := selectResources(*compute, *bootVolumes, *blockVolumes, resourceFlagsProvided)
+	resources, err := selectResources(resourceSelection{
+		compute: *compute, bootVolumes: *bootVolumes, blockVolumes: *blockVolumes,
+		vcns: *vcns, subnets: *subnets, securityLists: *securityLists,
+	}, resourceFlagsProvided)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -260,11 +285,14 @@ func main() {
 	}
 
 	log.Printf(
-		"Finished: found=%d instances=%d boot-volumes=%d block-volumes=%d would-update=%d updated=%d unchanged=%d skipped=%d failed=%d region-failures=%d",
+		"Finished: found=%d instances=%d boot-volumes=%d block-volumes=%d vcns=%d subnets=%d security-lists=%d would-update=%d updated=%d unchanged=%d skipped=%d failed=%d region-failures=%d",
 		atomic.LoadInt64(&totals.found),
 		atomic.LoadInt64(&totals.foundInstances),
 		atomic.LoadInt64(&totals.foundBootVolumes),
 		atomic.LoadInt64(&totals.foundBlockVolumes),
+		atomic.LoadInt64(&totals.foundVcns),
+		atomic.LoadInt64(&totals.foundSubnets),
+		atomic.LoadInt64(&totals.foundSecurityLists),
 		atomic.LoadInt64(&totals.wouldUpdate),
 		atomic.LoadInt64(&totals.updated),
 		atomic.LoadInt64(&totals.unchanged),
@@ -385,6 +413,15 @@ func processRegion(
 		}
 		blockClient.SetRegion(region)
 	}
+	var networkClient core.VirtualNetworkClient
+	if cfg.resources.vcns || cfg.resources.subnets || cfg.resources.securityLists {
+		var err error
+		networkClient, err = core.NewVirtualNetworkClientWithConfigurationProvider(provider)
+		if err != nil {
+			return fmt.Errorf("create Virtual Network client: %w", err)
+		}
+		networkClient.SetRegion(region)
+	}
 
 	jobs := make(chan resourceJob)
 	var workers sync.WaitGroup
@@ -398,6 +435,7 @@ func processRegion(
 					ctx,
 					computeClient,
 					blockClient,
+					networkClient,
 					region,
 					job,
 					cfg,
@@ -412,6 +450,9 @@ func processRegion(
 		func() error { return enqueueInstances(ctx, computeClient, region, cfg, jobs, totals) },
 		func() error { return enqueueBootVolumes(ctx, blockClient, region, cfg, jobs, totals) },
 		func() error { return enqueueBlockVolumes(ctx, blockClient, region, cfg, jobs, totals) },
+		func() error { return enqueueVcns(ctx, networkClient, region, cfg, jobs, totals) },
+		func() error { return enqueueSubnets(ctx, networkClient, region, cfg, jobs, totals) },
+		func() error { return enqueueSecurityLists(ctx, networkClient, region, cfg, jobs, totals) },
 	)
 
 	close(jobs)
@@ -428,6 +469,9 @@ func enqueueSelectedResources(
 	instances func() error,
 	bootVolumes func() error,
 	blockVolumes func() error,
+	vcns func() error,
+	subnets func() error,
+	securityLists func() error,
 ) []string {
 	var errors []string
 	if selection.compute {
@@ -442,6 +486,21 @@ func enqueueSelectedResources(
 	}
 	if selection.blockVolumes {
 		if err := blockVolumes(); err != nil {
+			errors = append(errors, err.Error())
+		}
+	}
+	if selection.vcns {
+		if err := vcns(); err != nil {
+			errors = append(errors, err.Error())
+		}
+	}
+	if selection.subnets {
+		if err := subnets(); err != nil {
+			errors = append(errors, err.Error())
+		}
+	}
+	if selection.securityLists {
+		if err := securityLists(); err != nil {
 			errors = append(errors, err.Error())
 		}
 	}
@@ -581,6 +640,7 @@ func processResource(
 	ctx context.Context,
 	computeClient core.ComputeClient,
 	blockClient core.BlockstorageClient,
+	networkClient core.VirtualNetworkClient,
 	region string,
 	job resourceJob,
 	cfg settings,
@@ -605,6 +665,12 @@ func processResource(
 		processBootVolume(ctx, blockClient, region, job, cfg, totals)
 	case resourceBlockVolume:
 		processBlockVolume(ctx, blockClient, region, job, cfg, totals)
+	case resourceVcn:
+		processVcn(ctx, networkClient, region, job, cfg, totals)
+	case resourceSubnet:
+		processSubnet(ctx, networkClient, region, job, cfg, totals)
+	case resourceSecurityList:
+		processSecurityList(ctx, networkClient, region, job, cfg, totals)
 	default:
 		log.Printf("[%s] ERROR unsupported resource type %q", region, job.kind)
 		atomic.AddInt64(&totals.failed, 1)

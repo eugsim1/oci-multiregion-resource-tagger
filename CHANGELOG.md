@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Add explicit `-vcns`, `-subnets`, and `-security-lists` selection flags and tag updates across READY regions, while keeping the existing no-flag resource scope.
+- Preserve existing network tags and use ETags; omit non-tag network settings and security rules from update requests.
+- Document network resource examples, IAM policies, and manual rollback guidance.
+
 ## 0.3.0
 
 - Add `-compute`, `-boot-volumes`, and `-block-volumes` flags to select which resource types are discovered and tagged; preserve all-types behavior when no selection flag is supplied.

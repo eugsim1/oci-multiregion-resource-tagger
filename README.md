@@ -1,6 +1,6 @@
 # OCI Multiregion Resource Tagger
 
-Apply free-form tags, nested or flattened defined tags, or any combination of them to OCI Compute instances, boot volumes, and block volumes in one compartment across every subscribed region in `READY` state.
+Apply free-form tags, nested or flattened defined tags, or any combination of them to OCI Compute instances, boot volumes, block volumes, virtual cloud networks (VCNs), subnets, and security lists in one compartment across every subscribed region in `READY` state.
 
 > This project is independent and is not affiliated with, endorsed by, or supported by Oracle or any Oracle product team.
 
@@ -17,10 +17,13 @@ For the specified compartment, the program discovers and processes these resourc
 | Compute instances | `ListInstances`, `GetInstance`, `UpdateInstance` |
 | Boot volumes | `ListBootVolumes`, `GetBootVolume`, `UpdateBootVolume` |
 | Block volumes | `ListVolumes`, `GetVolume`, `UpdateVolume` |
+| VCNs | `ListVcns`, `GetVcn`, `UpdateVcn` |
+| Subnets | `ListSubnets`, `GetSubnet`, `UpdateSubnet` |
+| Security lists | `ListSecurityLists`, `GetSecurityList`, `UpdateSecurityList` |
 
 The compartment itself is global, but the resources are regional. Child compartments are not traversed.
 
-By default, each invocation processes all three resource types in that compartment across all `READY` regions. Use `-compute`, `-boot-volumes`, and `-block-volumes` to select one or more types. These flags do not select an individual resource OCID.
+With no resource selection flags, each invocation processes compute instances, boot volumes, and block volumes as before. Network resources require explicit selection with `-vcns`, `-subnets`, or `-security-lists`. Any resource flags select only the named types; they can be combined. The flags do not select an individual resource OCID. Subnets and security lists are discovered by their own compartment, even if their VCN is elsewhere.
 
 ## Behavior
 
@@ -32,7 +35,8 @@ By default, each invocation processes all three resource types in that compartme
 - The program does not create, rename, or delete tag namespaces or tag definitions.
 - `TERMINATING` and `TERMINATED` resources are skipped.
 - Dry-run is the default. The `-apply` flag is required to make changes.
-- If any resource selection flag is provided, unselected resource types are not listed or updated. Without a resource selection flag, all three types are processed.
+- If any resource selection flag is provided, unselected resource types are not listed or updated. Without a resource selection flag, the original three compute and volume types are processed.
+- Network updates send only the merged tags. Subnet routing and security list associations, VCN settings, and security list ingress and egress rules are not sent in the update request.
 - ETags are passed with updates, so an update fails instead of silently overwriting a resource changed after it was read.
 - The OCI SDK default retry policy handles retryable throttling and transient service errors with backoff.
 
@@ -76,7 +80,7 @@ Allow group ResourceTaggers to use volumes in compartment TargetCompartment
 Allow group ResourceTaggers to use tag-namespaces in tenancy
 ```
 
-The last statement is required for defined tags. Restrict it to approved namespaces where possible:
+The `use tag-namespaces` statement is required for defined tags. Restrict it to approved namespaces where possible:
 
 ```text
 Allow group ResourceTaggers to use tag-namespaces in tenancy where any {
@@ -84,6 +88,16 @@ Allow group ResourceTaggers to use tag-namespaces in tenancy where any {
   target.tag-namespace.name='Security'
 }
 ```
+
+When selecting network resources, add only the corresponding policies:
+
+```text
+Allow group ResourceTaggers to manage vcns in compartment TargetCompartment
+Allow group ResourceTaggers to manage subnets in compartment TargetCompartment
+Allow group ResourceTaggers to manage security-lists in compartment TargetCompartment
+```
+
+OCI requires `manage` for these network update operations, including security list updates. Grant only the resource types you intend to tag. See [Oracle's Core Services policy reference](https://docs.oracle.com/en-us/iaas/Content/Identity/Reference/corepolicyreference.htm).
 
 See the complete [user and dynamic-group policy examples](examples/iam/).
 
@@ -181,7 +195,76 @@ go run . \
 
 The log begins with `Selected resources: block volumes`; changed resources appear as `DRY-RUN would update block-volume ...` in the preview.
 
-To target more than one type, combine flags. For example, `-compute -block-volumes` processes compute instances and block volumes while leaving boot volumes untouched. Omitting all three flags retains the default behavior of processing all three types. If resource flags are provided but all are set to `false`, the command exits with an error instead of accidentally processing every type. The final summary reports zero found resources for types that were not selected.
+### VCNs only
+
+Preview tags on VCNs in the target compartment:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -vcns \
+  -freeform-tags '{"Environment":"Production"}'
+```
+
+After reviewing the dry run, apply them to VCNs only:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -vcns \
+  -freeform-tags '{"Environment":"Production"}' \
+  -apply
+```
+
+The preview logs `Selected resources: VCNs` and `DRY-RUN would update vcn ...` for changed VCNs.
+
+### Subnets only
+
+Preview a defined tag on subnets in the target compartment:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -subnets \
+  -defined-tags '{"Operations":{"CostCenter":"42"}}'
+```
+
+Apply it to subnets only:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -subnets \
+  -defined-tags '{"Operations":{"CostCenter":"42"}}' \
+  -apply
+```
+
+The preview logs `Selected resources: subnets` and `DRY-RUN would update subnet ...` for changed subnets. The tag definition must already exist.
+
+### Security lists only
+
+Preview tags on security lists in the target compartment:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -security-lists \
+  -freeform-tags '{"ManagedBy":"GoTagger"}'
+```
+
+Apply them to security lists only:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -security-lists \
+  -freeform-tags '{"ManagedBy":"GoTagger"}' \
+  -apply
+```
+
+The preview logs `Selected resources: security lists` and `DRY-RUN would update security-list ...` for changed lists. The tag update omits ingress and egress rule fields, so the existing rules are retained. Oracle states that supplying rule fields would replace their entire existing values; see the [security list update reference](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/network/security-list/update.html).
+
+To target more than one type, combine flags. For example, `-vcns -subnets -security-lists` processes only the three network types. Omitting every selection flag retains the default behavior of processing compute instances and boot and block volumes. If resource flags are provided but all are set to `false`, the command exits with an error. The final summary reports zero found resources for types that were not selected.
 
 ## Defined-tag examples
 
@@ -300,6 +383,9 @@ go run . \
 | `-compute` | No | `false` | Select compute instances. Combine with other resource flags as needed. |
 | `-boot-volumes` | No | `false` | Select boot volumes. Combine with other resource flags as needed. |
 | `-block-volumes` | No | `false` | Select block volumes. Combine with other resource flags as needed. |
+| `-vcns` | No | `false` | Select VCNs. Combine with other resource flags as needed. |
+| `-subnets` | No | `false` | Select subnets. Combine with other resource flags as needed. |
+| `-security-lists` | No | `false` | Select security lists. Combine with other resource flags as needed. |
 | `-region-workers` | No | `3` | Maximum active regions. |
 | `-resource-workers` | No | `5` | Maximum active resources per region. |
 
@@ -319,7 +405,7 @@ DRY-RUN mode: no resource will be modified
 [eu-frankfurt-1] DRY-RUN would update instance app-01 (ocid1.instance...)
 [eu-frankfurt-1] DRY-RUN would update boot-volume app-01-boot (ocid1.bootvolume...)
 [eu-paris-1] UNCHANGED block-volume shared-data
-Finished: found=3 instances=1 boot-volumes=1 block-volumes=1 would-update=2 updated=0 unchanged=1 skipped=0 failed=0 region-failures=0
+Finished: found=3 instances=1 boot-volumes=1 block-volumes=1 vcns=0 subnets=0 security-lists=0 would-update=2 updated=0 unchanged=1 skipped=0 failed=0 region-failures=0
 ```
 
 ## Exit status
@@ -333,7 +419,7 @@ The program continues processing independent resources after an individual failu
 
 ### `NotAuthorizedOrNotFound`
 
-Verify the compartment OCID, the `use instances` and `use volumes` policies, and the active OCI profile. OCI deliberately uses this response for both missing resources and unauthorized access.
+Verify the compartment OCID, the policies for the selected resource types (`use instances`, `use volumes`, or the relevant `manage` network policies), and the active OCI profile. OCI deliberately uses this response for both missing resources and unauthorized access.
 
 ### Defined tag is not authorized or not found
 
@@ -431,7 +517,7 @@ The tagger reads each resource's current free-form and defined tags, then merges
 
 The tagger has no automatic rollback, history, or pre-change snapshot. A dry run shows which resources would change, but does not record their original values. Before using `-apply`, save the original tag maps and resource OCIDs for **every** resource shown in the dry run, in a protected location outside this repository. Include the region and resource type for each OCID.
 
-To reverse an applied run, restore each affected resource's original free-form and defined tag maps using the OCI Console or the appropriate OCI CLI update command: [`compute instance update`](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/compute/instance/update.html), [`bv boot-volume update`](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/bv/boot-volume/update.html), or [`bv volume update`](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/bv/volume/update.html). Compare the current tags with the saved maps before restoring, so changes made by others after the tagging run are not overwritten. The OCI CLI supports `--if-match` with a fresh ETag to guard against concurrent changes.
+To reverse an applied run, restore each affected resource's original free-form and defined tag maps using the OCI Console or the appropriate OCI CLI update command: [`compute instance update`](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/compute/instance/update.html), [`bv boot-volume update`](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/bv/boot-volume/update.html), [`bv volume update`](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/bv/volume/update.html), [`network vcn update`](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/network/vcn/update.html), [`network subnet update`](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/network/subnet/update.html), or [`network security-list update`](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/network/security-list/update.html). Compare the current tags with the saved maps before restoring, so changes made by others after the tagging run are not overwritten. The OCI CLI supports `--if-match` with a fresh ETag to guard against concurrent changes. When restoring security list tags, omit ingress and egress rule options unless you intend to replace the rules.
 
 Rerunning the tagger with old values can restore overwritten keys, but **cannot remove keys it added**, because it always merges tags. Those keys must be removed with a separate OCI tag update. Without a pre-change record, the tool cannot determine which values or keys to restore.
 
