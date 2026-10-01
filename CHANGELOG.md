@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Document a complete tagging example for compute instances, boot volumes, and block volumes.
+- Clarify preservation of existing tags and the manual rollback procedure.
+
 ## 0.2.0
 
 - Accept direct `namespace.key=value` input through repeatable `-flattened-tag` options and bulk JSON through `-flattened-tags`.
