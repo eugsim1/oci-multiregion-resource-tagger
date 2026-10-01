@@ -20,6 +20,8 @@ For the specified compartment, the program discovers and processes these resourc
 
 The compartment itself is global, but the resources are regional. Child compartments are not traversed.
 
+Each invocation processes all three resource types in that compartment across all `READY` regions. There is currently no flag to select only compute instances, only boot volumes, only block volumes, or one resource OCID.
+
 ## Behavior
 
 - Existing free-form and defined tags are retained.
@@ -294,6 +296,65 @@ The GitHub Actions workflow runs formatting checks, tests, vet, and build. Every
 - Remember that tags can participate in IAM conditions. Changing a tag can change access behavior.
 - Do not place secrets, customer identifiers, or confidential information in tag values.
 - Do not commit OCI configuration files, private keys, tokens, or captured API responses.
+
+## Example: tag a compute instance, boot volume, and block volume
+
+Suppose the target compartment contains these three resources in `eu-paris-1`. The names and OCIDs below are illustrative; the command also processes any other instances and volumes in the compartment across all `READY` regions.
+
+| Resource | Tags before the run | Tags after the run |
+| --- | --- | --- |
+| Compute instance `app-01` | Free-form `Owner=Platform`, `Environment=Development`; defined `Operations.CostCenter=100` | `Owner=Platform` is retained; `Environment=Production` and `Operations.CostCenter=42` replace matching values; `ManagedBy=GoTagger` is added. |
+| Boot volume `app-01-boot` | Free-form `Backup=Daily` | `Backup=Daily` is retained; free-form `Environment=Production`, `ManagedBy=GoTagger` and defined `Operations.CostCenter=42` are added. |
+| Block volume `app-data` | Free-form `Owner=Storage`; defined `Security.Classification=Internal` | Both existing tags are retained; free-form `Environment=Production`, `ManagedBy=GoTagger` and defined `Operations.CostCenter=42` are added. |
+
+From the repository root, first preview the changes (Bash):
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -freeform-tags '{"Environment":"Production","ManagedBy":"GoTagger"}' \
+  -defined-tags '{"Operations":{"CostCenter":"42"}}'
+```
+
+The dry-run output should include a line for each resource that needs a change, for example:
+
+```text
+[eu-paris-1] DRY-RUN would update instance app-01 (ocid1.instance...)
+[eu-paris-1] DRY-RUN would update boot-volume app-01-boot (ocid1.bootvolume...)
+[eu-paris-1] DRY-RUN would update block-volume app-data (ocid1.volume...)
+```
+
+Review the full output, then run the same command with `-apply` to write the tags:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -freeform-tags '{"Environment":"Production","ManagedBy":"GoTagger"}' \
+  -defined-tags '{"Operations":{"CostCenter":"42"}}' \
+  -apply
+```
+
+To verify each resource, replace the example OCIDs and region with the actual values and inspect `data.freeform-tags` and `data.defined-tags` in each OCI CLI response:
+
+```bash
+oci compute instance get --instance-id "ocid1.instance.oc1..example" --region "eu-paris-1"
+oci bv boot-volume get --boot-volume-id "ocid1.bootvolume.oc1..example" --region "eu-paris-1"
+oci bv volume get --volume-id "ocid1.volume.oc1..example" --region "eu-paris-1"
+```
+
+The OCI CLI is used only for verification in this example; the tagger itself uses the Go SDK. Defined tag namespaces and keys must exist before running the tagger.
+
+## Existing tags and rollback
+
+The tagger reads each resource's current free-form and defined tags, then merges in the requested tags. Keys not supplied in the command are preserved. A supplied free-form key or defined `namespace.key` replaces that key's current value. It does not remove other tags.
+
+The tagger has no automatic rollback, history, or pre-change snapshot. A dry run shows which resources would change, but does not record their original values. Before using `-apply`, save the original tag maps and resource OCIDs for **every** resource shown in the dry run, in a protected location outside this repository. Include the region and resource type for each OCID.
+
+To reverse an applied run, restore each affected resource's original free-form and defined tag maps using the OCI Console or the appropriate OCI CLI update command: [`compute instance update`](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/compute/instance/update.html), [`bv boot-volume update`](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/bv/boot-volume/update.html), or [`bv volume update`](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/bv/volume/update.html). Compare the current tags with the saved maps before restoring, so changes made by others after the tagging run are not overwritten. The OCI CLI supports `--if-match` with a fresh ETag to guard against concurrent changes.
+
+Rerunning the tagger with old values can restore overwritten keys, but **cannot remove keys it added**, because it always merges tags. Those keys must be removed with a separate OCI tag update. Without a pre-change record, the tool cannot determine which values or keys to restore.
+
+
 
 ## License
 
