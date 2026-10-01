@@ -1,9 +1,82 @@
 package main
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
+
+func TestResourceFlagsSelectOnlyRequestedTypes(t *testing.T) {
+	tests := []struct {
+		name          string
+		compute       bool
+		bootVolumes   bool
+		blockVolumes  bool
+		flagsProvided bool
+		want          []string
+	}{
+		{name: "default selects all", want: []string{"compute instances", "boot volumes", "block volumes"}},
+		{name: "compute only", compute: true, flagsProvided: true, want: []string{"compute instances"}},
+		{name: "boot volumes only", bootVolumes: true, flagsProvided: true, want: []string{"boot volumes"}},
+		{name: "block volumes only", blockVolumes: true, flagsProvided: true, want: []string{"block volumes"}},
+		{name: "combined selection", compute: true, blockVolumes: true, flagsProvided: true, want: []string{"compute instances", "block volumes"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			selection, err := selectResources(test.compute, test.bootVolumes, test.blockVolumes, test.flagsProvided)
+			if err != nil {
+				t.Fatalf("selectResources() error = %v", err)
+			}
+			if got := selection.names(); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("selected resource names = %v, want %v", got, test.want)
+			}
+
+			var listed []string
+			listErrors := enqueueSelectedResources(
+				selection,
+				func() error { listed = append(listed, "compute instances"); return nil },
+				func() error { listed = append(listed, "boot volumes"); return nil },
+				func() error { listed = append(listed, "block volumes"); return nil },
+			)
+			if len(listErrors) != 0 {
+				t.Fatalf("unexpected listing errors: %v", listErrors)
+			}
+			if !reflect.DeepEqual(listed, test.want) {
+				t.Fatalf("listed resource types = %v, want %v", listed, test.want)
+			}
+		})
+	}
+}
+
+func TestResourceFlagsRejectAllFalseWhenProvided(t *testing.T) {
+	if _, err := selectResources(false, false, false, true); err == nil {
+		t.Fatal("explicit resource flags set to false must not select all resource types")
+	}
+}
+
+func TestSelectedResourceListingContinuesAfterError(t *testing.T) {
+	var listed []string
+	selection, err := selectResources(true, true, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listErrors := enqueueSelectedResources(
+		selection,
+		func() error {
+			listed = append(listed, "compute instances")
+			return errors.New("compute listing failed")
+		},
+		func() error { listed = append(listed, "boot volumes"); return nil },
+		func() error { t.Fatal("block volume listing should not run"); return nil },
+	)
+	if !reflect.DeepEqual(listed, []string{"compute instances", "boot volumes"}) {
+		t.Fatalf("listed resource types = %v", listed)
+	}
+	if !reflect.DeepEqual(listErrors, []string{"compute listing failed"}) {
+		t.Fatalf("listing errors = %v", listErrors)
+	}
+}
 
 func TestMergeFreeformTagsPreservesAndOverrides(t *testing.T) {
 	existing := map[string]string{

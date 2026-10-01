@@ -20,7 +20,7 @@ For the specified compartment, the program discovers and processes these resourc
 
 The compartment itself is global, but the resources are regional. Child compartments are not traversed.
 
-Each invocation processes all three resource types in that compartment across all `READY` regions. There is currently no flag to select only compute instances, only boot volumes, only block volumes, or one resource OCID.
+By default, each invocation processes all three resource types in that compartment across all `READY` regions. Use `-compute`, `-boot-volumes`, and `-block-volumes` to select one or more types. These flags do not select an individual resource OCID.
 
 ## Behavior
 
@@ -32,6 +32,7 @@ Each invocation processes all three resource types in that compartment across al
 - The program does not create, rename, or delete tag namespaces or tag definitions.
 - `TERMINATING` and `TERMINATED` resources are skipped.
 - Dry-run is the default. The `-apply` flag is required to make changes.
+- If any resource selection flag is provided, unselected resource types are not listed or updated. Without a resource selection flag, all three types are processed.
 - ETags are passed with updates, so an update fails instead of silently overwriting a resource changed after it was read.
 - The OCI SDK default retry policy handles retryable throttling and transient service errors with backoff.
 
@@ -104,6 +105,83 @@ go run . \
   -freeform-tags '{"Environment":"Production","Owner":"FinOps"}' \
   -apply
 ```
+
+## Select resource types
+
+The following commands run from the repository root in Bash. Replace the example compartment OCID with your own. Each command targets **every resource of the selected type** in that compartment across all `READY` regions. First run without `-apply` and review the complete dry-run output. Add `-apply` only when the scope and tag changes are correct.
+
+### Compute instances only
+
+Preview free-form tags on compute instances; boot and block volumes are not listed or updated:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -compute \
+  -freeform-tags '{"Environment":"Production","ManagedBy":"GoTagger"}'
+```
+
+Apply the same tags to compute instances only:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -compute \
+  -freeform-tags '{"Environment":"Production","ManagedBy":"GoTagger"}' \
+  -apply
+```
+
+The log begins with `Selected resources: compute instances`; changed resources appear as `DRY-RUN would update instance ...` in the preview.
+
+### Boot volumes only
+
+Preview a defined tag on boot volumes; compute instances and block volumes are not listed or updated:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -boot-volumes \
+  -defined-tags '{"Operations":{"CostCenter":"42"}}'
+```
+
+Apply the defined tag to boot volumes only:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -boot-volumes \
+  -defined-tags '{"Operations":{"CostCenter":"42"}}' \
+  -apply
+```
+
+The log begins with `Selected resources: boot volumes`; changed resources appear as `DRY-RUN would update boot-volume ...` in the preview. The `Operations.CostCenter` tag definition must already exist.
+
+### Block volumes only
+
+Preview free-form and defined tags on block volumes; compute instances and boot volumes are not listed or updated:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -block-volumes \
+  -freeform-tags '{"Environment":"Production"}' \
+  -defined-tags '{"Operations":{"CostCenter":"42"}}'
+```
+
+Apply the same tags to block volumes only:
+
+```bash
+go run . \
+  -compartment-id "ocid1.compartment.oc1..example" \
+  -block-volumes \
+  -freeform-tags '{"Environment":"Production"}' \
+  -defined-tags '{"Operations":{"CostCenter":"42"}}' \
+  -apply
+```
+
+The log begins with `Selected resources: block volumes`; changed resources appear as `DRY-RUN would update block-volume ...` in the preview.
+
+To target more than one type, combine flags. For example, `-compute -block-volumes` processes compute instances and block volumes while leaving boot volumes untouched. Omitting all three flags retains the default behavior of processing all three types. If resource flags are provided but all are set to `false`, the command exits with an error instead of accidentally processing every type. The final summary reports zero found resources for types that were not selected.
 
 ## Defined-tag examples
 
@@ -219,6 +297,9 @@ go run . \
 | `-flattened-tag` | One tag option required | — | Repeatable `namespace.key=value` defined tag. |
 | `-flattened-tags` | One tag option required | `{}` | JSON object containing `namespace.key`/value mappings. |
 | `-apply` | No | `false` | Perform updates. Without it, the program is a dry run. |
+| `-compute` | No | `false` | Select compute instances. Combine with other resource flags as needed. |
+| `-boot-volumes` | No | `false` | Select boot volumes. Combine with other resource flags as needed. |
+| `-block-volumes` | No | `false` | Select block volumes. Combine with other resource flags as needed. |
 | `-region-workers` | No | `3` | Maximum active regions. |
 | `-resource-workers` | No | `5` | Maximum active resources per region. |
 
@@ -299,7 +380,7 @@ The GitHub Actions workflow runs formatting checks, tests, vet, and build. Every
 
 ## Example: tag a compute instance, boot volume, and block volume
 
-Suppose the target compartment contains these three resources in `eu-paris-1`. The names and OCIDs below are illustrative; the command also processes any other instances and volumes in the compartment across all `READY` regions.
+Suppose the target compartment contains these three resources in `eu-paris-1`. The names and OCIDs below are illustrative; without resource selection flags, the command also processes any other instances and volumes in the compartment across all `READY` regions.
 
 | Resource | Tags before the run | Tags after the run |
 | --- | --- | --- |
