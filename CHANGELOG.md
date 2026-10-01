@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0
+
+- Add `-compute`, `-boot-volumes`, and `-block-volumes` flags to select which resource types are discovered and tagged; preserve all-types behavior when no selection flag is supplied.
+- Document separate dry-run and apply examples for compute instances, boot volumes, and block volumes.
+
 ## 0.2.1
 
 - Document a complete tagging example for compute instances, boot volumes, and block volumes.

@@ -23,8 +23,39 @@ type settings struct {
 	apply           bool
 	regionWorkers   int
 	resourceWorkers int
+	resources       resourceSelection
 	freeformTags    map[string]string
 	definedTags     map[string]map[string]interface{}
+}
+
+type resourceSelection struct {
+	compute      bool
+	bootVolumes  bool
+	blockVolumes bool
+}
+
+func selectResources(compute, bootVolumes, blockVolumes, flagsProvided bool) (resourceSelection, error) {
+	if !flagsProvided {
+		return resourceSelection{compute: true, bootVolumes: true, blockVolumes: true}, nil
+	}
+	if !compute && !bootVolumes && !blockVolumes {
+		return resourceSelection{}, fmt.Errorf("at least one resource selection flag must be true")
+	}
+	return resourceSelection{compute: compute, bootVolumes: bootVolumes, blockVolumes: blockVolumes}, nil
+}
+
+func (selection resourceSelection) names() []string {
+	names := make([]string, 0, 3)
+	if selection.compute {
+		names = append(names, "compute instances")
+	}
+	if selection.bootVolumes {
+		names = append(names, "boot volumes")
+	}
+	if selection.blockVolumes {
+		names = append(names, "block volumes")
+	}
+	return names
 }
 
 type counters struct {
@@ -104,6 +135,21 @@ func main() {
 		false,
 		"Actually update resources; without this option, only show planned changes",
 	)
+	compute := flag.Bool(
+		"compute",
+		false,
+		"Select compute instances; if no resource flag is set, all three types are selected",
+	)
+	bootVolumes := flag.Bool(
+		"boot-volumes",
+		false,
+		"Select boot volumes; may be combined with other resource flags",
+	)
+	blockVolumes := flag.Bool(
+		"block-volumes",
+		false,
+		"Select block volumes; may be combined with other resource flags",
+	)
 	regionWorkers := flag.Int(
 		"region-workers",
 		3,
@@ -121,6 +167,17 @@ func main() {
 	)
 
 	flag.Parse()
+	resourceFlagsProvided := false
+	flag.Visit(func(option *flag.Flag) {
+		switch option.Name {
+		case "compute", "boot-volumes", "block-volumes":
+			resourceFlagsProvided = true
+		}
+	})
+	resources, err := selectResources(*compute, *bootVolumes, *blockVolumes, resourceFlagsProvided)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	if *compartmentID == "" {
 		log.Fatal("-compartment-id is required")
@@ -164,6 +221,7 @@ func main() {
 		apply:           *apply,
 		regionWorkers:   *regionWorkers,
 		resourceWorkers: *resourceWorkers,
+		resources:       resources,
 		freeformTags:    freeformTags,
 		definedTags:     definedTags,
 	}
@@ -184,6 +242,7 @@ func main() {
 	}
 
 	log.Printf("READY regions (%d): %s", len(regions), strings.Join(regions, ", "))
+	log.Printf("Selected resources: %s", strings.Join(cfg.resources.names(), ", "))
 	if !cfg.apply {
 		log.Print("DRY-RUN mode: no resource will be modified")
 	}
@@ -307,17 +366,25 @@ func processRegion(
 	cfg settings,
 	totals *counters,
 ) error {
-	computeClient, err := core.NewComputeClientWithConfigurationProvider(provider)
-	if err != nil {
-		return fmt.Errorf("create Compute client: %w", err)
+	var computeClient core.ComputeClient
+	if cfg.resources.compute {
+		var err error
+		computeClient, err = core.NewComputeClientWithConfigurationProvider(provider)
+		if err != nil {
+			return fmt.Errorf("create Compute client: %w", err)
+		}
+		computeClient.SetRegion(region)
 	}
-	computeClient.SetRegion(region)
 
-	blockClient, err := core.NewBlockstorageClientWithConfigurationProvider(provider)
-	if err != nil {
-		return fmt.Errorf("create Block Storage client: %w", err)
+	var blockClient core.BlockstorageClient
+	if cfg.resources.bootVolumes || cfg.resources.blockVolumes {
+		var err error
+		blockClient, err = core.NewBlockstorageClientWithConfigurationProvider(provider)
+		if err != nil {
+			return fmt.Errorf("create Block Storage client: %w", err)
+		}
+		blockClient.SetRegion(region)
 	}
-	blockClient.SetRegion(region)
 
 	jobs := make(chan resourceJob)
 	var workers sync.WaitGroup
@@ -340,16 +407,12 @@ func processRegion(
 		}()
 	}
 
-	var listErrors []string
-	if err := enqueueInstances(ctx, computeClient, region, cfg, jobs, totals); err != nil {
-		listErrors = append(listErrors, err.Error())
-	}
-	if err := enqueueBootVolumes(ctx, blockClient, region, cfg, jobs, totals); err != nil {
-		listErrors = append(listErrors, err.Error())
-	}
-	if err := enqueueBlockVolumes(ctx, blockClient, region, cfg, jobs, totals); err != nil {
-		listErrors = append(listErrors, err.Error())
-	}
+	listErrors := enqueueSelectedResources(
+		cfg.resources,
+		func() error { return enqueueInstances(ctx, computeClient, region, cfg, jobs, totals) },
+		func() error { return enqueueBootVolumes(ctx, blockClient, region, cfg, jobs, totals) },
+		func() error { return enqueueBlockVolumes(ctx, blockClient, region, cfg, jobs, totals) },
+	)
 
 	close(jobs)
 	workers.Wait()
@@ -358,6 +421,31 @@ func processRegion(
 		return fmt.Errorf("%s", strings.Join(listErrors, "; "))
 	}
 	return nil
+}
+
+func enqueueSelectedResources(
+	selection resourceSelection,
+	instances func() error,
+	bootVolumes func() error,
+	blockVolumes func() error,
+) []string {
+	var errors []string
+	if selection.compute {
+		if err := instances(); err != nil {
+			errors = append(errors, err.Error())
+		}
+	}
+	if selection.bootVolumes {
+		if err := bootVolumes(); err != nil {
+			errors = append(errors, err.Error())
+		}
+	}
+	if selection.blockVolumes {
+		if err := blockVolumes(); err != nil {
+			errors = append(errors, err.Error())
+		}
+	}
+	return errors
 }
 
 func enqueueInstances(
